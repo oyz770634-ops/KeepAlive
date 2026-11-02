@@ -1,11 +1,10 @@
 #if !UNITY_WEBGL || UNITY_EDITOR
 using System;
 using System.Net.WebSockets;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
-
+using KeepAlive.Core;
 namespace Network.Transport
 {
     public class WebSocketClient : IClientChannel
