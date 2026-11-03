@@ -1,5 +1,7 @@
 using Network.Transport;
+using ProtoBuf;
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using static UnityEditorInternal.VersionControl.ListControl;
 
@@ -45,14 +47,22 @@ namespace Network.Protocol
         /// </summary>
         public event Action<ChannelError> OnDisconnected;
 
+
+        // ★ 新增：序列化器
+        private readonly IMessageSerializer _serializer;
+
+        // ★ 新增：泛型 handler 注册映射，用于反注册
+        private readonly Dictionary<int, Dictionary<Delegate, Action<byte[]>>> _genericHandlers
+            = new Dictionary<int, Dictionary<Delegate, Action<byte[]>>>();
+
         public ChannelState State => _channel?.State ?? ChannelState.Disconnected;
         private ChannelState _lastState = ChannelState.Disconnected;
-        public NetworkService(IClientChannel channel)
+        public NetworkService(IClientChannel channel,IMessageSerializer serializer = null)
         {
             _channel = channel ?? throw new ArgumentNullException(nameof(channel));
             _codec = new MessageCodec();
             _router = new MessageRouter();
-
+            _serializer = serializer ?? new ProtobufNetSerializer();
             // 通过类型判断底层是 TCP 还是 KCP
             //_isKcp = _channel is KcpClient;
 
@@ -146,6 +156,67 @@ namespace Network.Protocol
             _channel.Send(packet);
         }
 
+
+        // ★ 新增：泛型发送
+        /// <summary>
+        /// 对象发送：序列化器把 message 转成 body，再加包头，再交给底层。
+        /// </summary>
+        public void Send<T>(int msgId, T message)
+        {
+            if (State != ChannelState.Connected)
+            {
+                Debug.LogWarning($"[NetworkService] 当前状态 {State}，发送 MsgId={msgId} 被丢弃");
+                return;
+            }
+
+            byte[] body = _serializer.Serialize(message);
+            byte[] packet = _codec.Encode(msgId, body);
+            _channel.Send(packet);
+        }
+
+        // ★ 新增：泛型注册
+        /// <summary>
+        /// 对象接收：内部包一层 Action&lt;byte[]&gt; 注册到 MessageRouter，
+        /// 收到字节时先反序列化成 T，再交给业务 handler。
+        /// </summary>
+        public void RegisterHandler<T>(int msgId, Action<T> handler)
+        {
+            if (handler == null) return;
+
+            Action<byte[]> wrapper = bytes =>
+            {
+                T msg = _serializer.Deserialize<T>(bytes);
+                handler.Invoke(msg);
+            };
+
+            // 记录 handler → wrapper 映射，供反注册用
+            if (!_genericHandlers.TryGetValue(msgId, out var map))
+            {
+                map = new Dictionary<Delegate, Action<byte[]>>();
+                _genericHandlers[msgId] = map;
+            }
+            map[handler] = wrapper;
+
+            _router.Register(msgId, wrapper);
+        }
+
+        // ★ 新增：泛型反注册
+        public void UnregisterHandler<T>(int msgId, Action<T> handler)
+        {
+            if (handler == null) return;
+
+            if (_genericHandlers.TryGetValue(msgId, out var map)
+                && map.TryGetValue(handler, out var wrapper))
+            {
+                map.Remove(handler);
+                _router.Unregister(msgId, wrapper);
+                if (map.Count == 0) _genericHandlers.Remove(msgId);
+            }
+        }
+
+
+
+
         // ================= 对外接口 =================
 
         public void RegisterHandler(int msgId, Action<byte[]> handler)
@@ -177,8 +248,11 @@ namespace Network.Protocol
         /// <summary>
         /// 退出游戏时调用
         /// </summary>
-        public void ClearHandlers() => _router.Clear();
-
+        public void ClearHandlers()
+        {
+            _router.Clear();
+            _genericHandlers.Clear();
+        }
         /// <summary>
         /// 驱动底层KCP必须每帧调用Tick，心跳驱动
         /// </summary>

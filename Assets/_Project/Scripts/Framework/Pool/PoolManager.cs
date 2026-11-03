@@ -1,0 +1,92 @@
+using System.Collections.Generic;
+using UnityEngine;
+using KeepAlive.Core;
+
+namespace KeepAlive.Framework.Pool
+{
+    public class PoolManager : MonoBehaviour
+    {
+        public static PoolManager Instance { get; private set; }
+
+        private readonly Dictionary<Component, IObjectPool> _pools = new();
+        private Transform _poolRoot;
+
+        private void Awake()
+        {
+            if (Instance != null && Instance != this) { Destroy(gameObject); return; }
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+
+            _poolRoot = new GameObject("[PoolRoot]").transform;
+            _poolRoot.SetParent(transform);
+        }
+
+        // ── 获取池子 / 取用 / 归还 ───────────────────────────
+
+        public ObjectPool<T> GetPool<T>(T prefab, int prewarmCount = 10, int maxSize = 0)
+            where T : Component
+        {
+            if (prefab == null)
+            {
+                Debug.LogError("[Pool] GetPool 时 prefab 为 null");
+                return null;
+            }
+
+            if (_pools.TryGetValue(prefab, out var existing))
+            {
+                // ★ 用 is 模式匹配，避免 as 返回 null 后 NRE
+                if (existing is ObjectPool<T> typedPool) return typedPool;
+
+                Debug.LogError($"[Pool] 类型不匹配: {prefab.name} 已用其他类型创建池子");
+                return null;
+            }
+
+            var newPool = new ObjectPool<T>(prefab, prewarmCount, _poolRoot, maxSize);
+            _pools.Add(prefab, newPool);
+            return newPool;
+        }
+
+        public T Spawn<T>(T prefab, int prewarmCount = 10, int maxSize = 0)
+            where T : Component
+        {
+            return GetPool(prefab, prewarmCount, maxSize)?.Get();
+        }
+
+        public void Despawn<T>(T prefab, T instance) where T : Component
+        {
+            if (instance == null) return;
+
+            // ★ prefab 已销毁（跨场景），不访问 .name，直接销毁 instance
+            if (prefab == null)
+            {
+                KeepAlive.Core.Logger.Warning("Pool", "Despawn 时 prefab 已失效，直接销毁 instance");
+                Object.Destroy(instance.gameObject);
+                return;
+            }
+
+            if (_pools.TryGetValue(prefab, out var existing) && existing is ObjectPool<T> typedPool)
+            {
+                typedPool.Release(instance);
+                return;
+            }
+
+            KeepAlive.Core.Logger.Error("Pool", $"找不到池子，销毁 instance: {instance.name}");
+            Object.Destroy(instance.gameObject);
+        }
+
+        // ── 清理 ─────────────────────────────────────────────
+
+        /// <summary>
+        /// 清理所有池子（★ 切场景时必须调用）。
+        /// 每个池子内部会真正 Object.Destroy 池中的全部对象。
+        /// </summary>
+        public void ClearAll()
+        {
+            foreach (var pool in _pools.Values)
+                pool.Clear();
+
+            _pools.Clear();
+            KeepAlive.Core.Logger.Info("Pool", $"已清理所有池子");
+        }
+    }
+}

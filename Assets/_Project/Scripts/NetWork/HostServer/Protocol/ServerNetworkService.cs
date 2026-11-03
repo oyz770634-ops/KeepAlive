@@ -14,13 +14,23 @@ namespace Network.Server
         // 上层业务层的心跳超时时间（10 秒）
         private const float BusinessTimeout = 10f;
 
+
+        // ★ 新增：序列化器
+        private readonly IMessageSerializer _serializer;
+
+        // ★ 新增：泛型 handler 注册映射
+        private readonly Dictionary<int, Dictionary<Delegate, Action<ServerSession, byte[]>>> _genericHandlers
+            = new Dictionary<int, Dictionary<Delegate, Action<ServerSession, byte[]>>>();
+
+
         // 服务端专属路由表：MsgId -> Action<发消息的玩家, 消息体>
         private readonly Dictionary<int, Action<ServerSession, byte[]>> _handlers = new Dictionary<int, Action<ServerSession, byte[]>>();
         private readonly List<ServerSession> _timeoutBuffer = new List<ServerSession>();
-        public ServerNetworkService(GameServerManager server)
+        public ServerNetworkService(GameServerManager server, IMessageSerializer serializer = null)
         {
             _server = server;
             _codec = new MessageCodec();
+            _serializer = serializer ?? new ProtobufNetSerializer();   // ★ 默认 Protobuf-net
 
             // 监听底层的事件
             _server.OnSessionConnected += HandleSessionConnected;
@@ -65,6 +75,7 @@ namespace Network.Server
         public void ClearHandlers()
         {
             _handlers.Clear();
+            _genericHandlers.Clear();
         }
 
         /// <summary>
@@ -100,6 +111,68 @@ namespace Network.Server
             byte[] packet = _codec.Encode(msgId, body);
             _server.Broadcast(packet);
         }
+
+
+        // ★ 新增：泛型注册
+        public void RegisterHandler<T>(int msgId, Action<ServerSession, T> handler)
+        {
+            if (handler == null) return;
+
+            Action<ServerSession, byte[]> wrapper = (session, bytes) =>
+            {
+                T msg = _serializer.Deserialize<T>(bytes);
+                handler.Invoke(session, msg);
+            };
+
+            if (!_genericHandlers.TryGetValue(msgId, out var map))
+            {
+                map = new Dictionary<Delegate, Action<ServerSession, byte[]>>();
+                _genericHandlers[msgId] = map;
+            }
+            map[handler] = wrapper;
+
+            if (_handlers.ContainsKey(msgId)) _handlers[msgId] += wrapper;
+            else _handlers[msgId] = wrapper;
+        }
+
+        // ★ 新增：泛型反注册
+        public void UnregisterHandler<T>(int msgId, Action<ServerSession, T> handler)
+        {
+            if (handler == null) return;
+
+            if (_genericHandlers.TryGetValue(msgId, out var map)
+                && map.TryGetValue(handler, out var wrapper))
+            {
+                map.Remove(handler);
+
+                if (_handlers.TryGetValue(msgId, out var existing))
+                {
+                    existing -= wrapper;
+                    if (existing == null) _handlers.Remove(msgId);
+                    else _handlers[msgId] = existing;
+                }
+
+                if (map.Count == 0) _genericHandlers.Remove(msgId);
+            }
+        }
+
+        // ★ 新增：泛型定向发送
+        public void SendToSession<T>(ServerSession session, int msgId, T message)
+        {
+            if (session == null) return;
+            byte[] body = _serializer.Serialize(message);
+            byte[] packet = _codec.Encode(msgId, body);
+            session.Send(packet);
+        }
+
+        // ★ 新增：泛型广播
+        public void Broadcast<T>(int msgId, T message)
+        {
+            byte[] body = _serializer.Serialize(message);
+            byte[] packet = _codec.Encode(msgId, body);
+            _server.Broadcast(packet);
+        }
+
 
         // ================= 底层事件拦截与处理 =================
 

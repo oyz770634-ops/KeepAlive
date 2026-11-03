@@ -53,5 +53,19 @@ namespace KeepAlive.Core
         }
 
         public static void Clear() => _eventDict.Clear();
+
+        /// <summary>
+        /// 原因：UIBase 追踪订阅时需要按 (Type, Delegate) 批量取消，泛型版本无法通过反射高效调用，加一个非泛型重载最直接。
+        /// </summary>
+        /// <param name="eventType"></param>
+        /// <param name="callback"></param>
+        internal static void Unsubscribe(Type eventType, Delegate callback)
+        {
+            if (callback == null) return;
+            if (!_eventDict.TryGetValue(eventType, out var existing)) return;
+            var newDelegate = Delegate.Remove(existing, callback);
+            if (newDelegate == null) _eventDict.Remove(eventType);
+            else _eventDict[eventType] = newDelegate;
+        }
     }
 }
