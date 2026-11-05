@@ -79,7 +79,7 @@ namespace KeepAlive.Framework.FSM
                 }
 
                 // ② 切换引用
-                CurrentState = newState;
+                CurrentState = newState;//如果此时新状态进入失败会导致这里状态已经变化此时状态不一致
 
                 // ③ 进入新状态
                 Logger.Info("FSM", $"进入状态: {newState.GetType().Name}");

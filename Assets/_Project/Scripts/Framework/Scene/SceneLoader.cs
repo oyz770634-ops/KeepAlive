@@ -51,7 +51,7 @@ namespace KeepAlive.Framework.Scene
         // ── 主场景加载 ────────────────────────────────────────
 
         /// <summary>
-        /// 异步加载主场景（Single 模式）。
+        /// 切换主场景（如：主菜单 → 关卡）
         /// 返回 true 表示加载成功；false 表示失败（已广播 SceneLoadFailedEvent）。
         /// ★ 事务性语义：失败时旧场景的 UI/音频/资源/池化对象全部保持原状。
         /// </summary>
@@ -99,7 +99,13 @@ namespace KeepAlive.Framework.Scene
                 // ⑤ 激活新场景（Unity 会卸载旧主场景）
                 if (!await ActivateWithTimeoutAsync(handle, sceneKey))
                 {
-                    if (handle.IsValid()) Addressables.Release(handle);
+                    //if (handle.IsValid()) Addressables.Release(handle);
+
+                    // ★ 不 Release！activateTask 可能仍在后台跑，Release 会与它并发
+                    //    handle 泄漏，但状态一致。业务收到 SceneLoadFailedEvent 后自行决策。
+                    KeepAlive.Core.Logger.Error("Scene",
+                        $"激活超时({_activateTimeout}s): {sceneKey}。" +
+                        $"句柄不释放以避免激活与释放竞态。handle 泄漏，需业务决策后续处理。");
                     return false;
                 }
 
@@ -126,7 +132,7 @@ namespace KeepAlive.Framework.Scene
         // ── Additive 场景 ─────────────────────────────────────
 
         /// <summary>
-        /// 叠加加载场景。失败时抛异常（调用方必须用 try-catch 或 await 捕获）。
+        /// 叠加加载（如：UI 场景、过渡场景、资源场景）。失败时抛异常（调用方必须用 try-catch 或 await 捕获）。
         /// 成功的句柄会被 SceneLoader 内部登记，切主场景时统一卸载。
         /// </summary>
         public async Task<AsyncOperationHandle<SceneInstance>> LoadSceneAdditiveAsync(string sceneKey)
@@ -205,13 +211,16 @@ namespace KeepAlive.Framework.Scene
         /// 显式清理所有模块。顺序固定且有明确原因：
         ///   1) 先 CloseAll/ClearAudio（Dispose 句柄正常生效，RefCount 正常减）
         ///   2) 再 ResourceManager.ClearAll（兜底剩余孤儿句柄）
+        /// ★ 切场景清理所有模块。
+        /// ★ 新增 Manager 必须在这里注册清理！
+        /// ★ 顺序要求：UI/Audio/Pool 必须在 ResourceManager 之前（否则句柄世代失效，Dispose 被忽略）
         /// </summary>
         private void CleanupModules()
         {
-            UIManager.Instance?.CloseAll(destroy: true);
-            AudioManager.Instance?.ClearAudio();
-            PoolManager.Instance?.ClearAll();
-            ResourceManager.ClearAll();
+            SafeCleanup("UIManager", () => UIManager.Instance?.CloseAll(destroy: true));
+            SafeCleanup("AudioManager", () => AudioManager.Instance?.ClearAudio());
+            SafeCleanup("PoolManager", () => PoolManager.Instance?.ClearAll());
+            SafeCleanup("ResourceManager", () => ResourceManager.ClearAll());
             // 说明：EventBus 不在这里清——业务可能需要跨场景的全局监听（如断线重连）。
             // 如果项目确实需要清空，可以在业务层显式调用 EventBus.Clear()。
         }
@@ -221,7 +230,7 @@ namespace KeepAlive.Framework.Scene
         {
             var activateTask = handle.Result.ActivateAsync().AsTask();
             var timeoutTask = Task.Delay(TimeSpan.FromSeconds(_activateTimeout));
-            var completed = await Task.WhenAny(activateTask, timeoutTask);
+            var completed = await Task.WhenAny(activateTask, timeoutTask);//当超时返回时应该将activateTask进行取消而非不管，这导致后续清除时存在问题
 
             if (completed == timeoutTask)
             {
@@ -248,6 +257,12 @@ namespace KeepAlive.Framework.Scene
                 ErrorMessage = message
             });
         }
+
+        private static void SafeCleanup(string name, Action action)
+        {
+            try { action(); }
+            catch (Exception e) { KeepAlive.Core.Logger.Exception("Scene", e, $"模块清理异常: {name}"); }
+        }
     }
 }
 
@@ -256,6 +271,11 @@ namespace KeepAlive.Framework.Scene
 /// </summary>
 public static class AsyncOperationExtensions
 {
+    /// <summary>
+    /// 将原方法转为AsTask使得外部能够结束判断与等待
+    /// </summary>
+    /// <param name="asyncOp"></param>
+    /// <returns></returns>
     public static Task AsTask(this AsyncOperation asyncOp)
     {
         var tcs = new TaskCompletionSource<bool>();

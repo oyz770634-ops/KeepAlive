@@ -26,7 +26,9 @@ namespace KeepAlive.Framework.Audio
         /// <summary>
         /// ★ 新增：用于解决快速切 BGM 竞态
         /// </summary>
-        private int _bgmRequestId = 0; 
+        private int _bgmRequestId = 0;
+
+        private string _currentBgmKey;   // ★ 新增：记录当前播放的 key（不是 clip.name）
 
         private void Awake()
         {
@@ -86,10 +88,14 @@ namespace KeepAlive.Framework.Audio
         }
 
         // ── BGM 控制 ──────────────────────────────────────────────
-
+        /// <summary>
+        /// 开启BGM
+        /// </summary>
+        /// <param name="key"></param>
+        /// <param name="fadeTime"></param>
         public async void PlayBGM(string key, float fadeTime = 1.0f)
         {
-            if (_bgmSource.clip != null && _bgmSource.clip.name == key) return;
+            if (_bgmSource.clip != null && _currentBgmKey == key) return;
 
             // ★ 1. 递增请求版本号
             int requestId = ++_bgmRequestId;
@@ -102,15 +108,20 @@ namespace KeepAlive.Framework.Audio
             if (handle == null || handle.Asset == null) return;
 
             if (_bgmFadeCoroutine != null) StopCoroutine(_bgmFadeCoroutine);
-            _bgmFadeCoroutine = StartCoroutine(FadeBGM(handle.Asset, fadeTime));
+            _bgmFadeCoroutine = StartCoroutine(FadeBGM(handle.Asset, fadeTime, key));
         }
-
-        private IEnumerator FadeBGM(AudioClip newClip, float fadeTime)
+        /// <summary>
+        /// 关闭BGM
+        /// </summary>
+        /// <param name="newClip"></param>
+        /// <param name="fadeTime"></param>
+        /// <returns></returns>
+        private IEnumerator FadeBGM(AudioClip newClip, float fadeTime, string newKey)
         {
             if (_bgmSource.isPlaying)
             {
                 float startVol = _bgmSource.volume;
-                for (float t = 0; t < fadeTime; t += Time.deltaTime)
+                for (float t = 0; t < fadeTime; t += Time.unscaledDeltaTime)
                 {
                     _bgmSource.volume = Mathf.Lerp(startVol, 0, t / fadeTime);
                     yield return null;
@@ -120,9 +131,10 @@ namespace KeepAlive.Framework.Audio
             }
 
             _bgmSource.clip = newClip;
+            _currentBgmKey = newKey;   // ★ 在换曲时更新
             _bgmSource.Play();
 
-            for (float t = 0; t < fadeTime; t += Time.deltaTime)
+            for (float t = 0; t < fadeTime; t += Time.unscaledDeltaTime)
             {
                 _bgmSource.volume = Mathf.Lerp(0, BGMVolume, t / fadeTime);
                 yield return null;
@@ -131,7 +143,10 @@ namespace KeepAlive.Framework.Audio
         }
 
         // ── SFX 控制 ──────────────────────────────────────────────
-
+        /// <summary>
+        /// 开启UI音效
+        /// </summary>
+        /// <param name="key"></param>
         public async void PlayUISFX(string key)
         {
             try
@@ -147,7 +162,11 @@ namespace KeepAlive.Framework.Audio
                 KeepAlive.Core.Logger.Exception("Audio", e, $"播放 UI 音效异常: {key}");
             }
         }
-
+        /// <summary>
+        /// 开启3D音效
+        /// </summary>
+        /// <param name="key"></param>
+        /// <param name="position"></param>
         public async void Play3DSFX(string key, Vector3 position)
         {
             try
@@ -168,7 +187,12 @@ namespace KeepAlive.Framework.Audio
                 KeepAlive.Core.Logger.Exception("Audio", e, $"播放 3D 音效异常: {key}");
             }
         }
-
+        /// <summary>
+        /// 清理音效
+        /// </summary>
+        /// <param name="source"></param>
+        /// <param name="clipLength"></param>
+        /// <returns></returns>
         private IEnumerator RecycleSFX(AudioSource source, float clipLength)
         {
             yield return new WaitForSeconds(clipLength);
@@ -183,7 +207,11 @@ namespace KeepAlive.Framework.Audio
         }
 
         // ── 辅助加载与释放 ──────────────────────────────────────────
-
+        /// <summary>
+        /// 加载音频并缓存句柄。缓存会持续增长直到 ClearAudio，
+        /// 因为所有播放过的音频都常驻内存（避免重复加载）。
+        /// 如果音效种类很多，可能需要在业务层做"按需清理"。
+        /// </summary>
         private async Task<ResourceHandle<AudioClip>> LoadAudioClipAsync(string key)
         {
             var newHandle = await ResourceManager.LoadAssetAsync<AudioClip>(key);
@@ -208,13 +236,19 @@ namespace KeepAlive.Framework.Audio
         }
 
         // ── 音量控制 ──────────────────────────────────────────────
-
+        /// <summary>
+        /// 控制BGM声音大小
+        /// </summary>
+        /// <param name="volume"></param>
         public void SetBGMVolume(float volume)
         {
             BGMVolume = Mathf.Clamp01(volume);
             if (_bgmSource != null) _bgmSource.volume = BGMVolume;
         }
-
+        /// <summary>
+        /// 控制音效声音大小
+        /// </summary>
+        /// <param name="volume"></param>
         public void SetSFXVolume(float volume)
         {
             SFXVolume = Mathf.Clamp01(volume);
@@ -233,8 +267,12 @@ namespace KeepAlive.Framework.Audio
             // 1. 清 BGM
             _bgmSource.Stop();
             _bgmSource.clip = null;
+            _currentBgmKey = null;   // ★ 重置
             if (_bgmFadeCoroutine != null) StopCoroutine(_bgmFadeCoroutine);
             _bgmRequestId++; // 阻断还在加载中的 BGM 请求
+
+            // ★ 新增：停止 UI 音效（PlayOneShot 队列）
+            _uiSFXSource.Stop();
 
             // 2. 清 3D 音效（★ 彻底清理：停下、清空列表）
             foreach (var source in _activeSfxList)

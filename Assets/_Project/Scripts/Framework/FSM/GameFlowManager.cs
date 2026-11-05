@@ -21,6 +21,9 @@ namespace KeepAlive.Framework
 
         private void Update() => _fsm?.Update();
 
+        // ★ 新增：只读转发
+        public IState CurrentState => _fsm?.CurrentState;
+        public bool IsTransitioning => _fsm?.IsTransitioning ?? false;
         /// <summary>启动游戏流程，通常由入口脚本在 Start 里调用一次</summary>
         public async Task StartWithAsync(IState initialState)
         {
@@ -29,6 +32,13 @@ namespace KeepAlive.Framework
                 KeepAlive.Core.Logger.Warning("FSM", "StartWithAsync 重复调用，忽略");
                 return;
             }
+
+            if (initialState == null)   // ★ 提前校验，不消耗 _started
+            {
+                KeepAlive.Core.Logger.Error("FSM", "初始状态为 null，状态机未启动");
+                return;                 // ← 不置 _started，允许后续修正后重试
+            }
+
             _started = true;
             await _fsm.ChangeStateAsync(initialState);
         }

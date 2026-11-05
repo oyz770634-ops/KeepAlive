@@ -39,7 +39,7 @@ namespace KeepAlive.Framework.Pool
         {
             if (prefab == null)
             {
-                Debug.LogError("[Pool] GetPool 时 prefab 为 null");
+               KeepAlive.Core.Logger.Error("Pool","[Pool] GetPool 时 prefab 为 null");
                 return null;
             }         
             if (_pools.TryGetValue(prefab, out var existing))
@@ -47,7 +47,7 @@ namespace KeepAlive.Framework.Pool
                 // ★ 用 is 模式匹配，避免 as 返回 null 后 NRE
                 if (existing is ObjectPool<T> typedPool) return typedPool;
 
-                Debug.LogError($"[Pool] 类型不匹配: {prefab.name} 已用其他类型创建池子");
+                KeepAlive.Core.Logger.Error("Pool",$"[Pool] 类型不匹配: {prefab.name} 已用其他类型创建池子");
                 return null;
             }
 
@@ -111,6 +111,8 @@ namespace KeepAlive.Framework.Pool
         /// </summary>
         public void ClearAll()
         {
+            // ★ 快照：防止池内对象的 OnDestroy 回调修改 _pools（如回调里调 GetPool）
+            var pools = new List<IObjectPool>(_pools.Values);
             foreach (var pool in _pools.Values)
                 pool.Clear();
 

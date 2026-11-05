@@ -86,12 +86,16 @@ namespace KeepAlive.Framework.UI
         public async Task<UIBase> OpenUIAsync<T>(string uiKey, UILayer layer = UILayer.Normal)
             where T : UIBase
         {
-            // 用户又点了打开，撤销之前的关闭意图
-            _pendingClose.Remove(uiKey);
-
             // 1. 缓存命中
             if (_uidata.TryGetValue(uiKey, out var existing))
             {
+                if (existing.UI is not T)   // ★ 校验
+                {
+                    KeepAlive.Core.Logger.Error("UI", $"类型不匹配: {uiKey} 已缓存为 {existing.UI?.GetType().Name}，请求 {typeof(T).Name}");
+                    return null;
+                }
+                // 用户又点了打开，撤销之前的关闭意图
+                _pendingClose.Remove(uiKey);
                 ShowUI(existing);
                 return existing.UI;
             }
@@ -117,7 +121,7 @@ namespace KeepAlive.Framework.UI
                 }
                 return null;  // 加载成功但未进缓存（如 pendingClose 触发）
             }
-
+            _pendingClose.Remove(uiKey);   // ★ 只在这里清
             // 3. 全新加载
             var tcs = new TaskCompletionSource<UIBase>();
             _loadingTasks[uiKey] = tcs;
@@ -193,6 +197,7 @@ namespace KeepAlive.Framework.UI
             // 1. 已加载 → 正常关闭
             if (_uidata.TryGetValue(uiKey, out var data))
             {
+                if (!data.IsVisible) return;   // ★ 已隐藏，不重复关闭
                 data.UI?.OnHide();
                 data.IsVisible = false;
                 RemoveFromStack(uiKey);
@@ -251,9 +256,8 @@ namespace KeepAlive.Framework.UI
             {
                 _uidata.Clear();
                 _hiddenOrder.Clear();
+                _uiStack.Clear();
             }
-            _uiStack.Clear();
-
             KeepAlive.Core.Logger.Info("UI", $"CloseAll (destroy={destroy})");
         }
 

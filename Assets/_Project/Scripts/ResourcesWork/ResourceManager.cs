@@ -140,6 +140,10 @@ namespace ResourcesWork
         /// <summary>
         /// 场景切换清空。
         /// 所有已发出的 View 句柄通过 _generation++ 自动作废，后续 Dispose 会被 Release 安全忽略。
+        /// 
+        /// 全量清理所有缓存的资源句柄和在途加载。
+        /// ★ 无"保留常驻资源"的机制：所有通过 LoadAssetAsync 加载的资源都会被释放。
+        ///   如有跨场景常驻需求，请在业务层绕开本方法（用 Resources.Load 或自行维护重建逻辑）。
         /// </summary>
         public static void ClearAll()
         {

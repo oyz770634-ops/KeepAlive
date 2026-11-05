@@ -10,7 +10,11 @@ namespace KeepAlive.Core
     {
         // 主线程模型：订阅/发布都在主线程，无需锁和并发字典
         private static readonly Dictionary<Type, Delegate> _eventDict = new();
-
+        /// <summary>
+        /// 注册事件委托
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="callback"></param>
         public static void Subscribe<T>(Action<T> callback) where T : IEvent
         {
             if (callback == null) return;
@@ -18,7 +22,11 @@ namespace KeepAlive.Core
             _eventDict.TryGetValue(key, out var existing);
             _eventDict[key] = Delegate.Combine(existing, callback);
         }
-
+        /// <summary>
+        /// 注销事件委托
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="callback"></param>
         public static void Unsubscribe<T>(Action<T> callback) where T : IEvent
         {
             if (callback == null) return;
@@ -29,7 +37,11 @@ namespace KeepAlive.Core
             if (newDelegate == null) _eventDict.Remove(key);
             else _eventDict[key] = newDelegate;
         }
-
+        /// <summary>
+        /// 发布事件
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="eventData"></param>
         public static void Publish<T>(T eventData) where T : IEvent
         {
             if (!_eventDict.TryGetValue(typeof(T), out var existing) || existing == null) return;
@@ -45,7 +57,7 @@ namespace KeepAlive.Core
                 }
                 catch (Exception e)
                 {
-                    Debug.LogError(
+                   KeepAlive.Core.Logger.Error("EventBus",
                         $"[EventBus] {typeof(T).Name} 回调 " +
                         $"{list[i].Method.DeclaringType?.Name}.{list[i].Method.Name} 异常:\n{e}");
                 }
